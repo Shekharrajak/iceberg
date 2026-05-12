@@ -529,6 +529,137 @@ public class TestExpressionParser {
         .isEqualTo(expected);
   }
 
+  /**
+   * Test 1 — IDReference round-trip with name.
+   *
+   * <p>Serializing a predicate whose term is an IDReference with field ID and name must produce a
+   * JSON object term (not a plain string), and parsing that JSON must reconstruct an IDReference
+   * with the same field ID and name.
+   *
+   * <p>Why: verifies the complete serialize→deserialize cycle for the PR #13879 wire format.
+   */
+  @Test
+  public void testIDReferenceRoundTripWithName() {
+    // field-id 101 is "data" (StringType) in SUPPORTED_PRIMITIVES / SCHEMA
+    IDReference<String> idRef = new IDReference<>(101, "data");
+    Expression expr = Expressions.equal(idRef, "hello");
+
+    // Serialize — must produce a JSON object term, not a plain string
+    String json = ExpressionParser.toJson(expr, true);
+    assertThat(json).contains("\"field-id\" : 101").contains("\"name\" : \"data\"");
+
+    // Deserialize — must reconstruct an IDReference, not a NamedReference
+    Expression parsed = ExpressionParser.fromJson(json, SCHEMA);
+    UnboundPredicate<?> pred = (UnboundPredicate<?>) parsed;
+    assertThat(pred.term()).isInstanceOf(IDReference.class);
+
+    IDReference<?> parsedRef = (IDReference<?>) pred.term();
+    assertThat(parsedRef.fieldId()).isEqualTo(101);
+    assertThat(parsedRef.name()).isEqualTo("data");
+  }
+
+  /**
+   * Test 2 — IDReference round-trip without name.
+   *
+   * <p>An IDReference with a null name must serialize without the "name" key and deserialize back
+   * with a null name. The "name" field is optional in the wire format.
+   *
+   * <p>Why: the PR spec makes name optional — clients that only have a field ID must still work.
+   */
+  @Test
+  public void testIDReferenceRoundTripWithoutName() {
+    IDReference<String> idRef = new IDReference<>(101, null);
+    Expression expr = Expressions.equal(idRef, "hello");
+
+    String json = ExpressionParser.toJson(expr, true);
+    // "name" key must be absent when name is null
+    assertThat(json).contains("\"field-id\" : 101").doesNotContain("\"name\"");
+
+    Expression parsed = ExpressionParser.fromJson(json, SCHEMA);
+    IDReference<?> parsedRef = (IDReference<?>) ((UnboundPredicate<?>) parsed).term();
+    assertThat(parsedRef.fieldId()).isEqualTo(101);
+    assertThat(parsedRef.name()).isNull();
+  }
+
+  /**
+   * Test 3 — Parse IDReference from raw JSON with name.
+   *
+   * <p>Parses a hand-crafted JSON string matching the PR #13879 wire format. Verifies the
+   * deserialization path directly without going through serialization.
+   *
+   * <p>Why: serialization and deserialization are separate code paths; both must be tested.
+   */
+  @Test
+  public void testIDReferenceFromJson() {
+    String json =
+        "{\n"
+            + "  \"type\" : \"eq\",\n"
+            + "  \"term\" : {\n"
+            + "    \"field-id\" : 101,\n"
+            + "    \"name\" : \"data\"\n"
+            + "  },\n"
+            + "  \"value\" : \"hello\"\n"
+            + "}";
+
+    Expression parsed = ExpressionParser.fromJson(json, SCHEMA);
+    assertThat(parsed).isInstanceOf(UnboundPredicate.class);
+
+    IDReference<?> ref = (IDReference<?>) ((UnboundPredicate<?>) parsed).term();
+    assertThat(ref.fieldId()).isEqualTo(101);
+    assertThat(ref.name()).isEqualTo("data");
+  }
+
+  /**
+   * Test 4 — Parse IDReference from raw JSON without name.
+   *
+   * <p>The "name" field is optional; parsing must succeed and produce a null name.
+   *
+   * <p>Why: documents the spec behavior that name-absent is a valid form.
+   */
+  @Test
+  public void testIDReferenceNoNameFromJson() {
+    String json =
+        "{\n"
+            + "  \"type\" : \"eq\",\n"
+            + "  \"term\" : {\n"
+            + "    \"field-id\" : 101\n"
+            + "  },\n"
+            + "  \"value\" : \"hello\"\n"
+            + "}";
+
+    Expression parsed = ExpressionParser.fromJson(json, SCHEMA);
+    IDReference<?> ref = (IDReference<?>) ((UnboundPredicate<?>) parsed).term();
+    assertThat(ref.fieldId()).isEqualTo(101);
+    assertThat(ref.name()).isNull();
+  }
+
+  /**
+   * Test 5 — Existing plain-string term still works (regression).
+   *
+   * <p>Adding IDReference detection must not break the existing behavior where a plain string term
+   * like "data" produces a NamedReference. This is the backward-compatibility regression test.
+   *
+   * <p>Why: any change to the deserialization path risks silently breaking existing serialized
+   * expressions stored in catalogs and table metadata files.
+   */
+  @Test
+  public void testExistingStringTermRegressionAfterIDReference() {
+    String json =
+        "{\n"
+            + "  \"type\" : \"eq\",\n"
+            + "  \"term\" : \"data\",\n"
+            + "  \"value\" : \"hello\"\n"
+            + "}";
+
+    Expression parsed = ExpressionParser.fromJson(json, SCHEMA);
+    assertThat(parsed).isInstanceOf(UnboundPredicate.class);
+
+    // Must be a NamedReference, not an IDReference
+    UnboundPredicate<?> pred = (UnboundPredicate<?>) parsed;
+    assertThat(pred.term()).isInstanceOf(NamedReference.class);
+    assertThat(((NamedReference<?>) pred.term()).name()).isEqualTo("data");
+  }
+
   @Test
   public void testNegativeScaleDecimalLiteral() {
     String expected =

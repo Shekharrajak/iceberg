@@ -50,6 +50,8 @@ public class ExpressionParser {
   private static final String CHILD = "child";
   private static final String REFERENCE = "reference";
   private static final String LITERAL = "literal";
+  private static final String FIELD_ID = "field-id";
+  private static final String NAME = "name";
 
   private ExpressionParser() {}
 
@@ -242,6 +244,15 @@ public class ExpressionParser {
         BoundTransform<?, ?> transform = (BoundTransform<?, ?>) term;
         transform(transform.transform().toString(), transform.ref().name());
         return;
+      } else if (term instanceof IDReference) {
+        IDReference<?> idRef = (IDReference<?>) term;
+        gen.writeStartObject();
+        gen.writeNumberField(FIELD_ID, idRef.fieldId());
+        if (idRef.name() != null) {
+          gen.writeStringField(NAME, idRef.name());
+        }
+        gen.writeEndObject();
+        return;
       } else if (term instanceof Reference) {
         gen.writeString(((Reference<?>) term).name());
         return;
@@ -405,6 +416,12 @@ public class ExpressionParser {
     if (node.isTextual()) {
       return Expressions.ref(node.asText());
     } else if (node.isObject()) {
+      if (node.has(FIELD_ID)) {
+        int fieldId = JsonUtil.getInt(FIELD_ID, node);
+        String name = node.has(NAME) ? JsonUtil.getString(NAME, node) : null;
+        return new IDReference<>(fieldId, name);
+      }
+
       String type = JsonUtil.getString(TYPE, node);
       switch (type) {
         case REFERENCE:
